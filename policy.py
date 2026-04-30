@@ -1,19 +1,3 @@
-"""
-DAEN/ISEN 489 Final Project — policy.py
-Fantasy Premier League sequential decision-making policy.
-
-StudentPolicy implements:
-  fit(train_data)  — feature engineering + reward model training
-  reset()          — resets rollout state
-  act(state)       — greedy transfer decisions using the learned reward model
-
-This version also includes a local simulation harness with fixes:
-  * scores only the starting 11
-  * doubles captain points
-  * updates budget after transfers
-  * uses a chronological validation split in fit()
-"""
-
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
@@ -22,9 +6,6 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.neural_network import MLPRegressor
 
 
-# ---------------------------------------------------------------------------
-# Squad / FPL-style constraints
-# ---------------------------------------------------------------------------
 SQUAD_COMPOSITION = {"GK": 2, "DEF": 5, "MID": 5, "FWD": 3}
 LINEUP_SIZE = 11
 MIN_FORMATION = {"GK": 1, "DEF": 3, "MID": 2, "FWD": 1}
@@ -51,10 +32,6 @@ FEATURE_COLS = [
     "xP",
 ]
 
-
-# ===========================================================================
-# Feature engineering
-# ===========================================================================
 
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -88,31 +65,18 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
             .map(lambda x: POSITION_MAP.get(x, "MID"))
         )
 
-    # Prefer stable player id if available
     player_col = "element" if "element" in df.columns else "name"
 
     df = df.sort_values([player_col, "GW"]).reset_index(drop=True)
     grp = df.groupby(player_col, sort=False)
 
-    df["avg_points_3"] = (
-        grp["total_points"].shift(1).rolling(3, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    df["avg_minutes_3"] = (
-        grp["minutes"].shift(1).rolling(3, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    df["avg_goals_3"] = (
-        grp["goals_scored"].shift(1).rolling(3, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    df["avg_assists_3"] = (
-        grp["assists"].shift(1).rolling(3, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
+    df["avg_points_3"] = grp["total_points"].shift(1).rolling(3, min_periods=1).mean().reset_index(level=0, drop=True)
+    df["avg_minutes_3"] = grp["minutes"].shift(1).rolling(3, min_periods=1).mean().reset_index(level=0, drop=True)
+    df["avg_goals_3"] = grp["goals_scored"].shift(1).rolling(3, min_periods=1).mean().reset_index(level=0, drop=True)
+    df["avg_assists_3"] = grp["assists"].shift(1).rolling(3, min_periods=1).mean().reset_index(level=0, drop=True)
 
     return df
 
-
-# ===========================================================================
-# Model comparison
-# ===========================================================================
 
 def _rmse(y_true, y_pred):
     return mean_squared_error(y_true, y_pred) ** 0.5
@@ -159,9 +123,6 @@ def compare_models(X_train, X_val, y_train, y_val):
         "model": gb,
     }
 
-    # "ICQ-style" RL-inspired value approximation:
-    # train a nonlinear value model with weighted targets to emphasize
-    # high-outcome states (a conservative proxy for value-based improvement).
     sample_w = np.where(y_train > np.median(y_train), 1.35, 1.0)
     mlp = MLPRegressor(
         hidden_layer_sizes=(64, 32),
@@ -187,10 +148,6 @@ def compare_models(X_train, X_val, y_train, y_val):
     print(f"  Best model selected: {best_name}\n")
     return results[best_name]["model"]
 
-
-# ===========================================================================
-# StudentPolicy
-# ===========================================================================
 
 class StudentPolicy:
     """
@@ -222,14 +179,12 @@ class StudentPolicy:
         if len(unique_gws) < 4:
             raise ValueError("Not enough gameweeks for chronological validation split.")
 
-        # Use last 20% of available train GWs as validation
         split_idx = max(1, int(0.8 * len(unique_gws)))
         split_gw = unique_gws[split_idx - 1]
 
         train_part = model_df[model_df["GW"] <= split_gw].copy()
         val_part = model_df[model_df["GW"] > split_gw].copy()
 
-        # Fallback if split is too small
         if len(val_part) == 0:
             train_part = model_df.iloc[:-max(1, len(model_df) // 5)].copy()
             val_part = model_df.iloc[-max(1, len(model_df) // 5):].copy()
@@ -243,7 +198,6 @@ class StudentPolicy:
         print("[fit] Comparing models ...")
         self.model = compare_models(X_train, X_val, y_train, y_val)
 
-        # Keep full processed table for lookup
         self.train_data = model_df
 
         print(
@@ -262,9 +216,6 @@ class StudentPolicy:
         feats = np.nan_to_num(feats, nan=0.0)
         return float(self.model.predict(feats.reshape(1, -1))[0])
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
     @staticmethod
     def _safe_float(x, default=0.0):
         try:
@@ -314,9 +265,6 @@ class StudentPolicy:
         return counts
 
     def _can_add(self, new_pid, squad_minus_out, state) -> bool:
-        """
-        Check whether adding new_pid preserves squad composition and club limits.
-        """
         pos = self._pos(new_pid, state)
 
         pos_counts = self._pos_counts(squad_minus_out, state)
@@ -370,9 +318,6 @@ class StudentPolicy:
             return 0.0
         return float(self.model.predict(feats.reshape(1, -1))[0])
 
-    # ------------------------------------------------------------------
-    # Lineup / captain
-    # ------------------------------------------------------------------
     def select_lineup_and_captain(self, squad, state):
         """
         Select best valid 11 and captain based on predicted scores.
@@ -389,7 +334,6 @@ class StudentPolicy:
         lineup = []
         pos_count = {"GK": 0, "DEF": 0, "MID": 0, "FWD": 0}
 
-        # First satisfy minimum formation
         for pos, req in MIN_FORMATION.items():
             filled = 0
             for pid in ranked:
@@ -404,7 +348,6 @@ class StudentPolicy:
                     pos_count[pos] += 1
                     filled += 1
 
-        # Fill remaining slots with highest predicted scorers
         for pid in ranked:
             if len(lineup) >= LINEUP_SIZE:
                 break
@@ -419,9 +362,6 @@ class StudentPolicy:
         captain = max(lineup, key=lambda p: scores[p]) if lineup else None
         return lineup, captain
 
-    # ------------------------------------------------------------------
-    # Policy action
-    # ------------------------------------------------------------------
     def act(self, state: dict) -> list:
         """
         Greedy single-transfer decision.
@@ -429,7 +369,6 @@ class StudentPolicy:
         if self.model is None:
             return []
 
-        # One free transfer each GW
         self._free_xfer = True
 
         squad = list(state.get("squad", []))
@@ -444,7 +383,6 @@ class StudentPolicy:
 
         squad_scores = {pid: self._score(pid, gw, state) for pid in squad}
 
-        # Score candidate pool, cap for speed
         capped_pool = pool[:2000]
         pool_scores = {pid: self._score(pid, gw, state) for pid in capped_pool}
         sorted_pool = sorted(pool_scores, key=pool_scores.get, reverse=True)
@@ -482,10 +420,6 @@ class StudentPolicy:
         return transfers
 
 
-# ===========================================================================
-# Local simulation harness
-# ===========================================================================
-
 def _build_player_meta(df: pd.DataFrame, gw: int = None) -> dict:
     """
     Build player metadata dictionary.
@@ -518,7 +452,6 @@ def _build_player_meta(df: pd.DataFrame, gw: int = None) -> dict:
             "team": str(row.get("team", "unknown")),
         }
 
-        # Also expose feature columns so policy can use current GW row in simulation
         for col in FEATURE_COLS:
             if col in row.index:
                 try:
@@ -594,7 +527,7 @@ def _score_lineup_actual(df: pd.DataFrame, lineup: list, captain, gw: int) -> fl
         pts = float(pts_map.get(pid, 0.0))
         total += pts
         if captain == pid:
-            total += pts  # double captain
+            total += pts
 
     return total
 
@@ -630,7 +563,6 @@ def run_no_transfer_baseline(df: pd.DataFrame, train_gws: int = 30, seed: int = 
     initial_meta = _build_player_meta(df, gw=train_gws)
     squad, budget = build_random_squad(initial_meta, budget=1000, seed=seed)
 
-    # Need a policy instance only for lineup selection logic
     dummy_policy = StudentPolicy()
     dummy_policy.model = None
 
@@ -648,9 +580,6 @@ def run_no_transfer_baseline(df: pd.DataFrame, train_gws: int = 30, seed: int = 
             "available_players": list(gw_meta.keys()),
         }
 
-        # For baseline lineup, use actual current-week total_points as oracle ranking only for local eval?
-        # No: use simple current-week xP fallback if available, else value-based ranking.
-        # We'll mimic lineup choice by a temporary score function if model absent.
         def baseline_rank(pid):
             info = gw_meta.get(pid, {})
             return float(info.get("xP", info.get("value", 0)))
@@ -747,10 +676,6 @@ def run_simulation(policy: StudentPolicy, df: pd.DataFrame, train_gws: int = 30,
 
     return total_pts
 
-
-# ===========================================================================
-# Main
-# ===========================================================================
 
 if __name__ == "__main__":
     import warnings
