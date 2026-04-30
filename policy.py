@@ -19,6 +19,7 @@ import pandas as pd
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.neural_network import MLPRegressor
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +157,25 @@ def compare_models(X_train, X_val, y_train, y_val):
         "mae": mean_absolute_error(y_val, gb_pred),
         "rmse": _rmse(y_val, gb_pred),
         "model": gb,
+    }
+
+    # "ICQ-style" RL-inspired value approximation:
+    # train a nonlinear value model with weighted targets to emphasize
+    # high-outcome states (a conservative proxy for value-based improvement).
+    sample_w = np.where(y_train > np.median(y_train), 1.35, 1.0)
+    mlp = MLPRegressor(
+        hidden_layer_sizes=(64, 32),
+        activation="relu",
+        alpha=1e-4,
+        learning_rate_init=1e-3,
+        max_iter=300,
+        random_state=42,
+    ).fit(X_train, y_train, sample_weight=sample_w)
+    mlp_pred = mlp.predict(X_val)
+    results["ICQValueNet"] = {
+        "mae": mean_absolute_error(y_val, mlp_pred),
+        "rmse": _rmse(y_val, mlp_pred),
+        "model": mlp,
     }
 
     print("\n--- Model Comparison (chronological validation) ---")
